@@ -1,0 +1,17 @@
+*/bin/zig
+*/bin/zig.exe
+*/README.md
+lib/
+
+!lib/package.json
+.zig-version
+.cache/
+.verdaccio-storage/
+.verdaccio-htpasswd
+
+# Zig
+.zig-cache/
+zig-out/
+.DS_Store
+
+tmp

@@ -1,0 +1,20 @@
+{
+  "name": "@zigc/linux-x64",
+  "version": "0.15.2",
+  "description": "Zig compiler binary for Linux x64",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "bin": {
+    "zig": "bin/zig"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ziex-dev/ziex.git"
+  },
+  "license": "MIT",
+  "preferUnplugged": true
+}

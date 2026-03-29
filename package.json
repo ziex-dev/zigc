@@ -1,5 +1,5 @@
 {
-  "name": "@zigc",
+  "name": "@zigc/workspace",
   "version": "0.15.2",
   "private": true,
   "description": "Zig Compiler binary distribution via npm",

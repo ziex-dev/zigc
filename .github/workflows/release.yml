@@ -1,0 +1,129 @@
+name: Release Zig Master to npm
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Daily at 02:00 UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force release even if version has not changed'
+        type: boolean
+        default: false
+
+jobs:
+  check:
+    name: Check for new Zig master version
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.compare.outputs.new_version }}
+      upstream_version: ${{ steps.compare.outputs.upstream_version }}
+      npm_version: ${{ steps.compare.outputs.npm_version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Compare versions
+        id: compare
+        run: |
+          curl -fsSL https://ziglang.org/download/index.json -o /tmp/upstream-index.json
+
+          UPSTREAM_VER=$(node -p "require('/tmp/upstream-index.json').master.version")
+          CURRENT_VER=$(node -p "require('./index.json').master.version")
+
+          # npm doesn't allow '+' in versions — strip the build hash
+          NPM_VER=$(echo "$UPSTREAM_VER" | sed 's/+.*//')
+
+          echo "Upstream : $UPSTREAM_VER"
+          echo "Current  : $CURRENT_VER"
+          echo "npm ver  : $NPM_VER"
+
+          echo "upstream_version=$UPSTREAM_VER" >> "$GITHUB_OUTPUT"
+          echo "npm_version=$NPM_VER"           >> "$GITHUB_OUTPUT"
+
+          FORCE="${{ github.event.inputs.force }}"
+          if [ "$UPSTREAM_VER" != "$CURRENT_VER" ] || [ "$FORCE" = "true" ]; then
+            echo "new_version=true" >> "$GITHUB_OUTPUT"
+            echo "New version detected (or force=true)."
+          else
+            echo "new_version=false" >> "$GITHUB_OUTPUT"
+            echo "No new version — skipping release."
+          fi
+
+  release:
+    name: Validate and publish
+    needs: check
+    if: needs.check.outputs.new_version == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install minisign
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y minisign
+
+      - name: Update index.json from upstream
+        run: curl -fsSL https://ziglang.org/download/index.json -o index.json
+
+      - name: Set package version
+        run: |
+          NPM_VER="${{ needs.check.outputs.npm_version }}"
+
+          # Update root package.json
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            p.version = '$NPM_VER';
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+          # Sync version to all workspace package.json files (--version skips downloads)
+          bash prepare.sh --version
+
+      - name: Download Zig binaries for all platforms
+        run: bash prepare.sh
+
+      - name: Install workspace dependencies
+        run: npm install
+
+      - name: Start Verdaccio
+        run: |
+          npm install -g verdaccio
+          verdaccio --config verdaccio.yaml --listen 4873 &
+          # Wait until the registry responds
+          timeout 30 bash -c 'until curl -sf http://localhost:4873 > /dev/null; do sleep 1; done'
+          echo "Verdaccio is up."
+
+      - name: Publish to Verdaccio (local registry)
+        run: npm publish --workspaces --registry http://localhost:4873 --tag master
+
+      - name: Validate with check.sh
+        run: bash check.sh
+
+      - name: Publish to npm with 'master' dist-tag
+        run: npm publish --workspaces --access public --provenance --tag master
+        env:
+          NODE_AUTH_TOKEN: ""
+
+      - name: Commit version bump
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.json package.json \
+                  lib/package.json cli/package.json \
+                  darwin-arm64/package.json darwin-x64/package.json \
+                  linux-x64/package.json   linux-arm64/package.json \
+                  win32-x64/package.json   win32-arm64/package.json
+          git commit -m "release: zig master ${{ needs.check.outputs.upstream_version }}"
+          git push

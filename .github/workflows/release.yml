@@ -18,6 +18,10 @@ jobs:
       new_version: ${{ steps.compare.outputs.new_version }}
       upstream_version: ${{ steps.compare.outputs.upstream_version }}
       npm_version: ${{ steps.compare.outputs.npm_version }}
+      
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 

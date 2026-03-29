@@ -12,13 +12,13 @@ on:
 
 jobs:
   check:
-    name: Check for new Zig master version
+    name: Discover Zig Release
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.compare.outputs.new_version }}
       upstream_version: ${{ steps.compare.outputs.upstream_version }}
       npm_version: ${{ steps.compare.outputs.npm_version }}
-      
+
     permissions:
       contents: read
       id-token: write
@@ -57,7 +57,7 @@ jobs:
           fi
 
   release:
-    name: Validate and publish
+    name: Publish to NPM
     needs: check
     if: needs.check.outputs.new_version == 'true'
     runs-on: ubuntu-latest
@@ -97,9 +97,6 @@ jobs:
 
       - name: Download Zig binaries for all platforms
         run: bash prepare.sh
-
-      - name: Install workspace dependencies
-        run: npm install
 
       - name: Start Verdaccio
         run: |

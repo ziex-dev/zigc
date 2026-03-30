@@ -8,6 +8,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REGISTRY="http://localhost:4873"
 PASSED=0
 FAILED=0
+CHECK_ONLY=false
+
+# Parse flags
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --check) CHECK_ONLY=true; shift ;;
+    *) echo "Unknown flag: $1" >&2; exit 1 ;;
+  esac
+done
+
 VERSION="${1:-}"
 ZIG_VERSION="${2:-}"
 CHECK_TMP=$(mktemp -d)
@@ -63,11 +73,13 @@ else
   echo "==> Verdaccio already running, skipping startup."
 fi
 
-# Publish all workspace packages to local registry
-echo "==> Publishing @zigc/* workspaces to local registry..."
-cd "$SCRIPT_DIR"
-npm publish --workspaces --registry "$REGISTRY" --tag dev \
-  "--//localhost:4873/:_authToken=local-dev-token" 2>&1
+# Publish all workspace packages to local registry (skip with --check)
+if [ "$CHECK_ONLY" = false ]; then
+  echo "==> Publishing @zigc/* workspaces to local registry..."
+  cd "$SCRIPT_DIR"
+  npm publish --workspaces --registry "$REGISTRY" --tag dev \
+    "--//localhost:4873/:_authToken=local-dev-token" 2>&1
+fi
 
 cd "$CHECK_TMP"
 
@@ -99,11 +111,11 @@ fi
 
 # Check @zigc/cli build command
 echo ""
-BUILD_OUTPUT=$(npx --yes --registry "$REGISTRY" @zigc/cli@dev build 2>&1) || true
+BUILD_OUTPUT=$(npx --yes --registry "$REGISTRY" @zigc/cli@dev build run 2>&1) || true
 if [ -n "$BUILD_OUTPUT" ]; then
-  pass "npx @zigc/cli build produces output"
+  pass "npx @zigc/cli build run produces output"
 else
-  fail "npx @zigc/cli build produced no output"
+  fail "npx @zigc/cli build run produced no output"
 fi
 
 # Check bunx compatibility

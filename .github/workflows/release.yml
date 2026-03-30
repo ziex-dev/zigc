@@ -1,4 +1,4 @@
-name: Release Zig Master to npm
+name: Release
 
 on:
   schedule:

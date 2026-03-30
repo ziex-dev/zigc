@@ -3,10 +3,10 @@ mkdir tmp
 cd tmp
 
 echo "version:"
-npx --registry http://localhost:4873 @zigc/cli@master version
+npx --registry http://localhost:4873 @zigc/cli version
 echo -e "\ninit:"
-npx --registry http://localhost:4873 @zigc/cli@master init
+npx --registry http://localhost:4873 @zigc/cli init
 echo -e "\nbuild:"
-npx --registry http://localhost:4873 @zigc/cli@master build
+npx --registry http://localhost:4873 @zigc/cli build
 echo -e "\nbuild run:"
-npx --registry http://localhost:4873 @zigc/cli@master build run
+npx --registry http://localhost:4873 @zigc/cli build run

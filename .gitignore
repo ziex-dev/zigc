@@ -2,6 +2,7 @@
 */bin/zig.exe
 */README.md
 lib/
+!cli/bin/zig
 
 !lib/package.json
 .zig-version

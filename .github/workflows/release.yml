@@ -21,7 +21,6 @@ jobs:
 
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -56,21 +55,20 @@ jobs:
             echo "No new version — skipping release."
           fi
 
-  release:
-    name: Publish to NPM
+  prepare:
+    name: Prepare Packages
     needs: check
     if: needs.check.outputs.new_version == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
+          node-version: '24'
 
       - name: Install minisign
         run: |
@@ -84,7 +82,6 @@ jobs:
         run: |
           NPM_VER="${{ needs.check.outputs.npm_version }}"
 
-          # Update root package.json
           node -e "
             const fs = require('fs');
             const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
@@ -98,19 +95,72 @@ jobs:
       - name: Download Zig binaries for all platforms
         run: bash prepare.sh
 
+      - name: Upload prepared workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: prepared-workspace
+          path: |
+            index.json
+            package.json
+            lib/
+            cli/
+            darwin-arm64/
+            darwin-x64/
+            linux-x64/
+            linux-arm64/
+            win32-x64/
+            win32-arm64/
+          retention-days: 1
+
+  smoke-test:
+    name: Smoke Test Packages
+    needs: [check, prepare]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Download prepared workspace
+        uses: actions/download-artifact@v4
+        with:
+          name: prepared-workspace
+
       - name: Start Verdaccio
         run: |
           npm install -g verdaccio
           verdaccio --config verdaccio.yaml --listen 4873 &
-          # Wait until the registry responds
-          timeout 30 bash -c 'until curl -sf http://localhost:4873 > /dev/null; do sleep 1; done'
+          timeout 30 bash -c 'until curl -sf http://localhost:4873/-/ping > /dev/null; do sleep 1; done'
           echo "Verdaccio is up."
 
-      - name: Publish to Verdaccio (local registry)
-        run: npm publish --workspaces --registry http://localhost:4873 --tag master
+      - name: Run smoke tests
+        env:
+          CI: true
+        run: bash check.sh "${{ needs.check.outputs.npm_version }}"
 
-      - name: Validate with check.sh
-        run: bash check.sh
+  publish:
+    name: Publish to NPM
+    needs: [check, smoke-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+
+      - name: Download prepared workspace
+        uses: actions/download-artifact@v4
+        with:
+          name: prepared-workspace
 
       - name: Publish to npm with 'master' dist-tag
         run: npm publish --workspaces --access public --provenance --tag master
@@ -126,5 +176,6 @@ jobs:
                   darwin-arm64/package.json darwin-x64/package.json \
                   linux-x64/package.json   linux-arm64/package.json \
                   win32-x64/package.json   win32-arm64/package.json
+          git diff --cached --quiet && echo "Nothing to commit." && exit 0
           git commit -m "release: zig master ${{ needs.check.outputs.upstream_version }}"
           git push

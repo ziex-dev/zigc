@@ -171,6 +171,9 @@ jobs:
           timeout 30 bash -c 'until curl -sf http://localhost:4873/-/ping > /dev/null; do sleep 1; done'
           echo "Verdaccio is up."
 
+      - name: Restore binary permissions
+        run: chmod +x linux-x64/bin/zig linux-arm64/bin/zig darwin-arm64/bin/zig darwin-x64/bin/zig
+
       - name: Run smoke tests
         env:
           CI: true
@@ -196,6 +199,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: prepared-workspace
+
+      - name: Restore binary permissions
+        run: chmod +x linux-x64/bin/zig linux-arm64/bin/zig darwin-arm64/bin/zig darwin-x64/bin/zig
 
       - name: Publish to npm
         run: |

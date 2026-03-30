@@ -146,6 +146,9 @@ else
     exit 1
   fi
 
+  CHECK_TMP=$(mktemp -d)
+  cd "$CHECK_TMP"
+
   echo ""
   CLI_OUTPUT=$("$ZIG_BIN" version 2>&1) || true
   if echo "$CLI_OUTPUT" | grep -qF "$ZIG_VERSION"; then

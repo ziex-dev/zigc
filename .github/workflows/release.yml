@@ -127,6 +127,8 @@ jobs:
 
       - name: Download Zig binaries for all platforms
         run: bash prepare.sh
+        env:
+          ZIG_UPSTREAM_VERSION: ${{ needs.check.outputs.upstream_version }}
 
       - name: Upload prepared workspace
         uses: actions/upload-artifact@v4

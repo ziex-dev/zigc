@@ -15,9 +15,12 @@ LIB_COPIED=false
 ZIG_PUBKEY="RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
 
 # For dev versions, read full version (with +hash) from index.json
-# npm strips the +hash from package.json versions
+# npm strips the +hash from package.json versions.
+# ZIG_UPSTREAM_VERSION env var can override this (used when npm_version differs from zig_version).
 ZIG_FULL_VER="$ZIG_VER"
-if [[ "$ZIG_VER" == *"-dev"* ]] && [ -f "$SCRIPT_DIR/index.json" ]; then
+if [ -n "${ZIG_UPSTREAM_VERSION:-}" ]; then
+  ZIG_FULL_VER="$ZIG_UPSTREAM_VERSION"
+elif [[ "$ZIG_VER" == *"-dev"* ]] && [ -f "$SCRIPT_DIR/index.json" ]; then
   ZIG_FULL_VER=$(node -p "require('$SCRIPT_DIR/index.json').master.version")
 fi
 

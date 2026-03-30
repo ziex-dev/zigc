@@ -6,26 +6,29 @@ set -euo pipefail
 # Places lib/ in the shared @zigc/lib package (identical across platforms).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ZIG_VER=$(node -p "require('$SCRIPT_DIR/package.json').version")
 LIB_DIR="$SCRIPT_DIR/lib"
 CACHE_DIR="$SCRIPT_DIR/.cache"
-LIB_COPIED=false
 
 # Zig signing public key (from https://ziglang.org/download/)
 ZIG_PUBKEY="RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
 
-# For dev versions, read full version (with +hash) from index.json
-# npm strips the +hash from package.json versions.
-# ZIG_UPSTREAM_VERSION env var can override this (used when npm_version differs from zig_version).
-ZIG_FULL_VER="$ZIG_VER"
-if [ -n "${ZIG_UPSTREAM_VERSION:-}" ]; then
-  ZIG_FULL_VER="$ZIG_UPSTREAM_VERSION"
-elif [[ "$ZIG_VER" == *"-dev"* ]] && [ -f "$SCRIPT_DIR/index.json" ]; then
-  ZIG_FULL_VER=$(node -p "require('$SCRIPT_DIR/index.json').master.version")
-fi
+# Read version and resolve full Zig version in one node call
+read -r ZIG_VER ZIG_FULL_VER_RAW <<< "$(node -e "
+  const p = require('$SCRIPT_DIR/package.json').version;
+  let full = p;
+  const upstream = process.env.ZIG_UPSTREAM_VERSION || '';
+  if (upstream) {
+    full = upstream;
+  } else if (p.includes('-dev')) {
+    try { full = require('$SCRIPT_DIR/index.json').master.version; } catch {}
+  }
+  process.stdout.write(p + ' ' + full);
+")"
+ZIG_FULL_VER="${ZIG_UPSTREAM_VERSION:-$ZIG_FULL_VER_RAW}"
 
-# Update version in all workspace package.json files
+# Update version in all workspace package.json files (in parallel)
 echo "Updating package versions to $ZIG_VER..."
+pids=()
 for pkg in lib cli darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64 win32-arm64; do
   pkg_json="$SCRIPT_DIR/$pkg/package.json"
   [ -f "$pkg_json" ] || continue
@@ -33,7 +36,6 @@ for pkg in lib cli darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64 win32
     const fs = require('fs');
     const p = JSON.parse(fs.readFileSync('$pkg_json', 'utf8'));
     p.version = '$ZIG_VER';
-    // Update any @zigc/* refs in dependencies / optionalDependencies
     for (const key of ['dependencies', 'optionalDependencies']) {
       if (!p[key]) continue;
       for (const dep of Object.keys(p[key])) {
@@ -41,8 +43,10 @@ for pkg in lib cli darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64 win32
       }
     }
     fs.writeFileSync('$pkg_json', JSON.stringify(p, null, 2) + '\n');
-  "
+  " &
+  pids+=($!)
 done
+for pid in "${pids[@]}"; do wait "$pid"; done
 
 # --version: only sync package versions, skip downloads
 if [[ "${1:-}" == "--version" ]]; then
@@ -69,42 +73,34 @@ if ! command -v minisign &>/dev/null; then
   fi
 fi
 
-# Fetch community mirrors, shuffle them, append official as final fallback
+# Fetch community mirrors and shuffle (in background while we do other setup)
 echo "Fetching mirrors..."
-MIRROR_RAW=$(curl -fsSL "https://ziglang.org/download/community-mirrors.txt" 2>/dev/null || echo "")
-SHUFFLED_MIRRORS=$(printf '%s\n' "$MIRROR_RAW" | python3 -c "
+MIRRORS_FILE=$(mktemp)
+trap 'rm -f "$MIRRORS_FILE"' EXIT
+{
+  MIRROR_RAW=$(curl -fsSL "https://ziglang.org/download/community-mirrors.txt" 2>/dev/null || echo "")
+  printf '%s\n' "$MIRROR_RAW" | python3 -c "
 import sys, random
 lines = [l.strip() for l in sys.stdin if l.strip()]
 random.shuffle(lines)
 print('\n'.join(lines))
-")
-# Append official base as last-resort fallback
-SHUFFLED_MIRRORS="${SHUFFLED_MIRRORS}
-${OFFICIAL_BASE}"
-
-# --version: only sync package versions, skip downloads
-if [[ "${1:-}" == "--version" ]]; then
-  echo "Done."
-  exit 0
-fi
+"
+  echo "$OFFICIAL_BASE"
+} > "$MIRRORS_FILE"
 
 echo "Downloading Zig $ZIG_FULL_VER for all platforms..."
 
 # Track version to detect stale binaries
 VERSION_FILE="$SCRIPT_DIR/.zig-version"
-OLD_VER=""
 if [ -f "$VERSION_FILE" ]; then
   OLD_VER=$(cat "$VERSION_FILE")
-fi
-
-# If version changed, clean all binaries and lib
-if [ -n "$OLD_VER" ] && [ "$OLD_VER" != "$ZIG_FULL_VER" ]; then
-  echo "  Version changed ($OLD_VER -> $ZIG_VER), cleaning old binaries..."
-  rm -rf "$SCRIPT_DIR"/darwin-arm64/bin "$SCRIPT_DIR"/darwin-x64/bin \
-         "$SCRIPT_DIR"/linux-x64/bin "$SCRIPT_DIR"/linux-arm64/bin \
-         "$SCRIPT_DIR"/win32-x64/bin "$SCRIPT_DIR"/win32-arm64/bin
-  # Remove lib contents but preserve package.json
-  find "$LIB_DIR" -mindepth 1 -not -name 'package.json' -delete 2>/dev/null || true
+  if [ "$OLD_VER" != "$ZIG_FULL_VER" ]; then
+    echo "  Version changed ($OLD_VER -> $ZIG_FULL_VER), cleaning old binaries..."
+    rm -rf "$SCRIPT_DIR"/darwin-arm64/bin "$SCRIPT_DIR"/darwin-x64/bin \
+           "$SCRIPT_DIR"/linux-x64/bin "$SCRIPT_DIR"/linux-arm64/bin \
+           "$SCRIPT_DIR"/win32-x64/bin "$SCRIPT_DIR"/win32-arm64/bin
+    find "$LIB_DIR" -mindepth 1 -not -name 'package.json' -delete 2>/dev/null || true
+  fi
 fi
 
 # platform-dir  zig-target           archive-ext
@@ -117,50 +113,41 @@ PLATFORMS=(
   "win32-arm64    aarch64-windows     zip"
 )
 
-# Check if lib is already populated with actual Zig content
-if [ -d "$LIB_DIR/std" ]; then
-  LIB_COPIED=true
-fi
-
-for entry in "${PLATFORMS[@]}"; do
-  read -r dir target ext <<< "$entry"
-  pkg_dir="$SCRIPT_DIR/$dir"
-  bin_dir="$pkg_dir/bin"
+# Download, verify, and extract a single platform. Called in a subshell.
+download_platform() {
+  local dir="$1" target="$2" ext="$3"
+  local pkg_dir="$SCRIPT_DIR/$dir"
+  local bin_dir="$pkg_dir/bin"
   mkdir -p "$bin_dir"
 
   if [ -f "$bin_dir/zig" ] || [ -f "$bin_dir/zig.exe" ]; then
     echo "  $dir: already exists, skipping"
-    continue
+    return 0
   fi
 
-  archive_name="zig-${target}-${ZIG_FULL_VER}.${ext}"
-  extracted_dir="zig-${target}-${ZIG_FULL_VER}"
-  cached_archive="$CACHE_DIR/$ZIG_FULL_VER/$archive_name"
-  cached_minisig="${cached_archive}.minisig"
+  local archive_name="zig-${target}-${ZIG_FULL_VER}.${ext}"
+  local extracted_dir="zig-${target}-${ZIG_FULL_VER}"
+  local cached_archive="$CACHE_DIR/$ZIG_FULL_VER/$archive_name"
+  local cached_minisig="${cached_archive}.minisig"
 
-  # Try to use verified cached archive, otherwise fetch from mirrors
   _cache_valid() {
     [ -f "$cached_archive" ] || return 1
     if [ "$MINISIGN_AVAILABLE" = true ]; then
       [ -f "$cached_minisig" ] && \
         minisign -V -P "$ZIG_PUBKEY" -m "$cached_archive" -x "$cached_minisig" -q 2>/dev/null
-    else
-      return 0
     fi
   }
 
-  if _cache_valid; then
-    echo "  $dir: using cached archive"
-  else
+  if ! _cache_valid; then
     rm -f "$cached_archive" "$cached_minisig"
     mkdir -p "$CACHE_DIR/$ZIG_FULL_VER"
-    fetched=false
+    local fetched=false
+    local tmp_archive="${cached_archive}.tmp.$$"
+    local tmp_minisig="${cached_minisig}.tmp.$$"
 
     while IFS= read -r mirror; do
       [ -z "$mirror" ] && continue
-      url="${mirror}/${archive_name}"
-      tmp_archive="${cached_archive}.tmp"
-      tmp_minisig="${cached_minisig}.tmp"
+      local url="${mirror}/${archive_name}"
 
       echo "  $dir: trying ${mirror}..."
       curl -fsSL "${url}?source=zigc-npm" -o "$tmp_archive" 2>/dev/null || { rm -f "$tmp_archive"; continue; }
@@ -168,14 +155,13 @@ for entry in "${PLATFORMS[@]}"; do
       if [ "$MINISIGN_AVAILABLE" = true ]; then
         curl -fsSL "${url}.minisig?source=zigc-npm" -o "$tmp_minisig" 2>/dev/null || { rm -f "$tmp_archive" "$tmp_minisig"; continue; }
 
-        # Verify signature
         if ! minisign -V -P "$ZIG_PUBKEY" -m "$tmp_archive" -x "$tmp_minisig" -q 2>/dev/null; then
           echo "  $dir: signature verification failed, skipping mirror"
           rm -f "$tmp_archive" "$tmp_minisig"
           continue
         fi
 
-        # Verify filename in trusted comment to prevent downgrade attacks
+        local actual_name
         actual_name=$(grep "^trusted comment:" "$tmp_minisig" | sed 's/.*\bfile:\([^ \t]*\).*/\1/')
         if [ "$actual_name" != "$archive_name" ]; then
           echo "  $dir: filename mismatch in signature (got '$actual_name'), skipping mirror"
@@ -189,12 +175,14 @@ for entry in "${PLATFORMS[@]}"; do
       mv "$tmp_archive" "$cached_archive"
       fetched=true
       break
-    done <<< "$SHUFFLED_MIRRORS"
+    done < "$MIRRORS_FILE"
 
     if [ "$fetched" = false ]; then
       echo "  $dir: all mirrors failed"
-      exit 1
+      return 1
     fi
+  else
+    echo "  $dir: using cached archive"
   fi
 
   echo "  $dir: extracting..."
@@ -207,48 +195,59 @@ for entry in "${PLATFORMS[@]}"; do
     chmod +x "$bin_dir/zig"
   fi
 
-  # Copy lib/ to shared @zigc/lib package (only once, identical across platforms)
-  if [ "$LIB_COPIED" = false ] && [ -d "$pkg_dir/$extracted_dir/lib" ]; then
+  # Copy lib/ to shared @zigc/lib package (from linux-x64 only to avoid races)
+  if [ "$dir" = "linux-x64" ] && [ ! -d "$LIB_DIR/std" ] && [ -d "$pkg_dir/$extracted_dir/lib" ]; then
     echo "  lib: copying shared lib/ from $dir"
     mkdir -p "$LIB_DIR"
     cp -r "$pkg_dir/$extracted_dir/lib/"* "$LIB_DIR/"
-    LIB_COPIED=true
   fi
 
-  # Clean up extracted directory (keep cached archive)
   rm -rf "$pkg_dir/$extracted_dir"
   echo "  $dir: done"
+}
+
+export -f download_platform
+export SCRIPT_DIR ZIG_FULL_VER CACHE_DIR LIB_DIR ZIG_PUBKEY MINISIGN_AVAILABLE MIRRORS_FILE
+
+# Download all platforms in parallel
+pids=()
+for entry in "${PLATFORMS[@]}"; do
+  read -r dir target ext <<< "$entry"
+  download_platform "$dir" "$target" "$ext" &
+  pids+=($!)
 done
 
-# If all binaries were already cached, lib may not have been copied yet — extract it now
-if [ "$LIB_COPIED" = false ]; then
-  for entry in "${PLATFORMS[@]}"; do
-    read -r dir target ext <<< "$entry"
-    archive_name="zig-${target}-${ZIG_FULL_VER}.${ext}"
-    cached_archive="$CACHE_DIR/$ZIG_FULL_VER/$archive_name"
-    extracted_dir="zig-${target}-${ZIG_FULL_VER}"
-    pkg_dir="$SCRIPT_DIR/$dir"
-    [ -f "$cached_archive" ] || continue
-
-    echo "  lib: extracting from cached $dir archive..."
-    if [ "$ext" = "zip" ]; then
-      (cd "$pkg_dir" && unzip -qo "$cached_archive" "${extracted_dir}/lib/*")
-    else
-      (cd "$pkg_dir" && tar xf "$cached_archive" "${extracted_dir}/lib")
-    fi
-    mkdir -p "$LIB_DIR"
-    cp -r "$pkg_dir/$extracted_dir/lib/"* "$LIB_DIR/"
-    rm -rf "$pkg_dir/$extracted_dir"
-    LIB_COPIED=true
-    break
-  done
+failed=false
+for pid in "${pids[@]}"; do
+  wait "$pid" || failed=true
+done
+if [ "$failed" = true ]; then
+  echo "One or more platforms failed to download."
+  exit 1
 fi
 
-# Copy README.md to all packages
+# If lib still not populated (all platforms were cached), extract from linux-x64 now
+if [ ! -d "$LIB_DIR/std" ]; then
+  read -r _ target ext <<< "${PLATFORMS[2]}"  # linux-x64
+  archive_name="zig-${target}-${ZIG_FULL_VER}.${ext}"
+  extracted_dir="zig-${target}-${ZIG_FULL_VER}"
+  cached_archive="$CACHE_DIR/$ZIG_FULL_VER/$archive_name"
+  pkg_dir="$SCRIPT_DIR/linux-x64"
+  echo "  lib: extracting from cached linux-x64 archive..."
+  (cd "$pkg_dir" && tar xf "$cached_archive" "${extracted_dir}/lib")
+  mkdir -p "$LIB_DIR"
+  cp -r "$pkg_dir/$extracted_dir/lib/"* "$LIB_DIR/"
+  rm -rf "$pkg_dir/$extracted_dir"
+fi
+
+# Copy README.md to all packages (in parallel)
 echo "Copying README.md to all packages..."
+pids=()
 for dir in cli lib darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64 win32-arm64; do
-  cp "$SCRIPT_DIR/README.md" "$SCRIPT_DIR/$dir/README.md"
+  cp "$SCRIPT_DIR/README.md" "$SCRIPT_DIR/$dir/README.md" &
+  pids+=($!)
 done
+for pid in "${pids[@]}"; do wait "$pid"; done
 
 # Save current version
 echo "$ZIG_FULL_VER" > "$VERSION_FILE"

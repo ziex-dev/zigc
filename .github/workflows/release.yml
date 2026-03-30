@@ -111,22 +111,16 @@ jobs:
       - name: Update index.json from upstream
         run: curl -fsSL https://ziglang.org/download/index.json -o index.json
 
-      - name: Set package version
+      - name: Prepare workspace and download binaries
         run: |
           NPM_VER="${{ needs.check.outputs.npm_version }}"
-
           node -e "
             const fs = require('fs');
             const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
             p.version = '$NPM_VER';
             fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
           "
-
-          # Sync version to all workspace package.json files (--version skips downloads)
-          bash prepare.sh --version
-
-      - name: Download Zig binaries for all platforms
-        run: bash prepare.sh
+          bash prepare.sh
         env:
           ZIG_UPSTREAM_VERSION: ${{ needs.check.outputs.upstream_version }}
 

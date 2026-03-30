@@ -66,7 +66,8 @@ fi
 # Publish all workspace packages to local registry
 echo "==> Publishing @zigc/* workspaces to local registry..."
 cd "$SCRIPT_DIR"
-npm_config__authtoken="local-dev-token" npm publish --workspaces --registry "$REGISTRY" --tag dev 2>&1
+npm publish --workspaces --registry "$REGISTRY" --tag dev \
+  "--//localhost:4873/:_authToken=local-dev-token" 2>&1
 
 cd "$CHECK_TMP"
 

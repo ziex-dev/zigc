@@ -13,7 +13,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ziex-dev/ziex.git"
+    "url": "git+https://github.com/ziex-dev/zigc.git"
   },
   "license": "MIT",
   "preferUnplugged": true

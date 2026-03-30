@@ -12,7 +12,7 @@ on:
 
 jobs:
   check:
-    name: Discover Zig Release
+    name: Discover
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.compare.outputs.new_version }}
@@ -56,7 +56,7 @@ jobs:
           fi
 
   prepare:
-    name: Prepare Packages
+    name: Prepare
     needs: check
     if: needs.check.outputs.new_version == 'true'
     runs-on: ubuntu-latest
@@ -113,7 +113,7 @@ jobs:
           retention-days: 1
 
   smoke-test:
-    name: Smoke Test Packages
+    name: Test
     needs: [check, prepare]
     runs-on: ubuntu-latest
 
@@ -142,7 +142,7 @@ jobs:
         run: bash check.sh "${{ needs.check.outputs.npm_version }}"
 
   publish:
-    name: Publish to NPM
+    name: Publish
     needs: [check, smoke-test]
     runs-on: ubuntu-latest
     permissions:
@@ -166,16 +166,3 @@ jobs:
         run: npm publish --workspaces --access public --provenance --tag master
         env:
           NODE_AUTH_TOKEN: ""
-
-      - name: Commit version bump
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add index.json package.json \
-                  lib/package.json cli/package.json \
-                  darwin-arm64/package.json darwin-x64/package.json \
-                  linux-x64/package.json   linux-arm64/package.json \
-                  win32-x64/package.json   win32-arm64/package.json
-          git diff --cached --quiet && echo "Nothing to commit." && exit 0
-          git commit -m "release: zig master ${{ needs.check.outputs.upstream_version }}"
-          git push

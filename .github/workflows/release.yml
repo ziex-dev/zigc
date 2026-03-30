@@ -6,19 +6,19 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: 'Force release even if version has not changed'
+        description: 'Force release even if already published'
         type: boolean
         default: false
       zig_version:
-        description: 'Override Zig version to release (e.g. 0.16.0-dev.2973+06b85a4fd). Defaults to latest master.'
+        description: 'Zig version (default: master)'
         type: string
         default: ''
       npm_version:
-        description: 'Override npm version (e.g. 0.16.0-test.0). Defaults to zig_version without build hash.'
+        description: 'npm version (default: zig version)'
         type: string
         default: ''
       tag_name:
-        description: 'Override npm dist-tag (e.g. master, latest, next). Defaults to master.'
+        description: 'npm dist-tag (default: master)'
         type: string
         default: 'master'
 
@@ -108,9 +108,6 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y minisign
 
-      - name: Update index.json from upstream
-        run: curl -fsSL https://ziglang.org/download/index.json -o index.json
-
       - name: Prepare workspace and download binaries
         run: |
           NPM_VER="${{ needs.check.outputs.npm_version }}"
@@ -129,7 +126,6 @@ jobs:
         with:
           name: prepared-workspace
           path: |
-            index.json
             package.json
             lib/
             cli/

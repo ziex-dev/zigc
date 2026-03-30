@@ -12,19 +12,9 @@ CACHE_DIR="$SCRIPT_DIR/.cache"
 # Zig signing public key (from https://ziglang.org/download/)
 ZIG_PUBKEY="RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
 
-# Read version and resolve full Zig version in one node call
-read -r ZIG_VER ZIG_FULL_VER_RAW <<< "$(node -e "
-  const p = require('$SCRIPT_DIR/package.json').version;
-  let full = p;
-  const upstream = process.env.ZIG_UPSTREAM_VERSION || '';
-  if (upstream) {
-    full = upstream;
-  } else if (p.includes('-dev')) {
-    try { full = require('$SCRIPT_DIR/index.json').master.version; } catch {}
-  }
-  process.stdout.write(p + ' ' + full);
-")"
-ZIG_FULL_VER="${ZIG_UPSTREAM_VERSION:-$ZIG_FULL_VER_RAW}"
+# Read npm version from package.json
+ZIG_VER=$(node -p "require('$SCRIPT_DIR/package.json').version")
+ZIG_FULL_VER="${ZIG_UPSTREAM_VERSION:-$ZIG_VER}"
 
 # Update version in all workspace package.json files (in parallel)
 echo "Updating package versions to $ZIG_VER..."

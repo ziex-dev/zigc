@@ -10,13 +10,14 @@ PASSED=0
 FAILED=0
 VERSION="${1:-}"
 ZIG_VERSION="${2:-}"
+CHECK_TMP=$(mktemp -d)
 
 cleanup() {
   if [ -n "${VERDACCIO_PID:-}" ]; then
     kill "$VERDACCIO_PID" 2>/dev/null || true
     wait "$VERDACCIO_PID" 2>/dev/null || true
   fi
-  rm -rf "$SCRIPT_DIR/_check_tmp" "$SCRIPT_DIR/_check_npmrc"
+  rm -rf "$CHECK_TMP"
 }
 trap cleanup EXIT
 
@@ -33,26 +34,17 @@ fi
 
 echo "==> Checking packages at npm version $VERSION (zig version: $ZIG_VERSION)"
 
-# Use a clean .npmrc scoped to this script so CI's global auth config
-# (written by setup-node) doesn't interfere with local Verdaccio.
-export npm_config_userconfig="$SCRIPT_DIR/_check_npmrc"
-cat > "$npm_config_userconfig" <<EOF
-registry=$REGISTRY
-//localhost:4873/:_authToken=local-dev-token
-EOF
-
-# Start Verdaccio only if not already running
+# Start Verdaccio only if not already running (install with real registry, before overriding)
 if ! curl -sf "$REGISTRY/-/ping" > /dev/null 2>&1; then
   if [ -n "${CI:-}" ]; then
     echo "==> Starting Verdaccio in CI..."
-    npm install -g verdaccio
-    verdaccio --config "$SCRIPT_DIR/verdaccio.yaml" --listen 4873 &
-    VERDACCIO_PID=$!
+    npm install -g verdaccio --registry https://registry.npmjs.org
   else
     echo "==> Starting local Verdaccio registry..."
-    npx --yes verdaccio --config "$SCRIPT_DIR/verdaccio.yaml" --listen 4873 &
-    VERDACCIO_PID=$!
+    npx --yes --registry https://registry.npmjs.org verdaccio --version > /dev/null
   fi
+  verdaccio --config "$SCRIPT_DIR/verdaccio.yaml" --listen 4873 &
+  VERDACCIO_PID=$!
 
   # Wait for Verdaccio to be ready (up to 60s)
   for i in $(seq 1 120); do
@@ -76,9 +68,7 @@ echo "==> Publishing @zigc/* workspaces to local registry..."
 cd "$SCRIPT_DIR"
 npm publish --workspaces --registry "$REGISTRY" --tag dev 2>&1
 
-# Create temp directory for testing
-mkdir -p "$SCRIPT_DIR/_check_tmp"
-cd "$SCRIPT_DIR/_check_tmp"
+cd "$CHECK_TMP"
 
 pass() { PASSED=$((PASSED + 1)); echo "  PASS: $1"; }
 fail() { FAILED=$((FAILED + 1)); echo "  FAIL: $1"; }

@@ -1,7 +1,7 @@
 */bin/zig
 */bin/zig.exe
 */README.md
-lib/
+lib/**/*
 !cli/bin/zig
 
 !lib/package.json

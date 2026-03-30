@@ -9,6 +9,7 @@ REGISTRY="http://localhost:4873"
 PASSED=0
 FAILED=0
 VERSION="${1:-}"
+ZIG_VERSION="${2:-}"
 
 cleanup() {
   if [ -n "${VERDACCIO_PID:-}" ]; then
@@ -19,11 +20,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Resolve expected version
+# Resolve expected npm version
 if [ -z "$VERSION" ]; then
   VERSION=$(node -p "require('$SCRIPT_DIR/package.json').version")
 fi
-echo "==> Checking packages at version $VERSION"
+
+# ZIG_VERSION is what `zig version` prints — may differ from npm version when
+# npm_version is overridden (e.g. 0.16.0-test.0 vs 0.16.0-dev.3039+b490412cd)
+if [ -z "$ZIG_VERSION" ]; then
+  ZIG_VERSION="$VERSION"
+fi
+
+echo "==> Checking packages at npm version $VERSION (zig version: $ZIG_VERSION)"
 
 # Use a clean .npmrc scoped to this script so CI's global auth config
 # (written by setup-node) doesn't interfere with local Verdaccio.
@@ -80,13 +88,13 @@ fail() { FAILED=$((FAILED + 1)); echo "  FAIL: $1"; }
 echo ""
 echo "Running checks..."
 
-# Check @zigc/cli version command
+# Check @zigc/cli version command (binary outputs the real Zig version, not npm version)
 echo ""
 CLI_OUTPUT=$(npx --yes --registry "$REGISTRY" @zigc/cli@dev version 2>&1) || true
-if echo "$CLI_OUTPUT" | grep -qF "$VERSION"; then
-  pass "npx @zigc/cli version > $VERSION"
+if echo "$CLI_OUTPUT" | grep -qF "$ZIG_VERSION"; then
+  pass "npx @zigc/cli version > $ZIG_VERSION"
 else
-  fail "npx @zigc/cli version expected '$VERSION', got: $CLI_OUTPUT"
+  fail "npx @zigc/cli version expected '$ZIG_VERSION', got: $CLI_OUTPUT"
 fi
 
 # Check @zigc/cli init command
@@ -111,10 +119,10 @@ fi
 if command -v bunx &> /dev/null; then
   echo ""
   BUNX_OUTPUT=$(timeout 60 env BUN_CONFIG_REGISTRY="$REGISTRY" BUN_CONFIG_IGNORE_SCRIPTS=true bunx --verbose @zigc/cli@dev version 2>&1) || true
-  if echo "$BUNX_OUTPUT" | grep -qF "$VERSION"; then
-    pass "bunx @zigc/cli version > $VERSION"
+  if echo "$BUNX_OUTPUT" | grep -qF "$ZIG_VERSION"; then
+    pass "bunx @zigc/cli version > $ZIG_VERSION"
   else
-    fail "bunx @zigc/cli version expected '$VERSION', got: $BUNX_OUTPUT"
+    fail "bunx @zigc/cli version expected '$ZIG_VERSION', got: $BUNX_OUTPUT"
   fi
 fi
 

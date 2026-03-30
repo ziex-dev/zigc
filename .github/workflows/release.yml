@@ -148,9 +148,13 @@ jobs:
           retention-days: 1
 
   smoke-test:
-    name: Test
+    name: Test (${{ matrix.os }})
     needs: [check, prepare]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -164,20 +168,15 @@ jobs:
         with:
           name: prepared-workspace
 
-      - name: Start Verdaccio
-        run: |
-          npm install -g verdaccio
-          verdaccio --config verdaccio.yaml --listen 4873 &
-          timeout 30 bash -c 'until curl -sf http://localhost:4873/-/ping > /dev/null; do sleep 1; done'
-          echo "Verdaccio is up."
-
       - name: Restore binary permissions
+        if: runner.os != 'Windows'
         run: chmod +x linux-x64/bin/zig linux-arm64/bin/zig darwin-arm64/bin/zig darwin-x64/bin/zig
 
       - name: Run smoke tests
+        shell: bash
         env:
           CI: true
-        run: bash check.sh "${{ needs.check.outputs.npm_version }}"
+        run: bash check.sh "${{ needs.check.outputs.npm_version }}" "${{ needs.check.outputs.upstream_version }}"
 
   publish:
     name: Publish

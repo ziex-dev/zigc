@@ -9,6 +9,18 @@ on:
         description: 'Force release even if version has not changed'
         type: boolean
         default: false
+      zig_version:
+        description: 'Override Zig version to release (e.g. 0.16.0-dev.2973+06b85a4fd). Defaults to latest master.'
+        type: string
+        default: ''
+      npm_version:
+        description: 'Override npm version (e.g. 0.16.0-test.0). Defaults to zig_version without build hash.'
+        type: string
+        default: ''
+      tag_name:
+        description: 'Override npm dist-tag (e.g. master, latest, next). Defaults to master.'
+        type: string
+        default: 'master'
 
 jobs:
   check:
@@ -18,6 +30,7 @@ jobs:
       new_version: ${{ steps.compare.outputs.new_version }}
       upstream_version: ${{ steps.compare.outputs.upstream_version }}
       npm_version: ${{ steps.compare.outputs.npm_version }}
+      tag_name: ${{ steps.compare.outputs.tag_name }}
 
     permissions:
       contents: read
@@ -31,23 +44,43 @@ jobs:
       - name: Compare versions
         id: compare
         run: |
-          curl -fsSL https://ziglang.org/download/index.json -o /tmp/upstream-index.json
+          OVERRIDE_ZIG_VER="${{ github.event.inputs.zig_version }}"
+          OVERRIDE_NPM_VER="${{ github.event.inputs.npm_version }}"
+          TAG_NAME="${{ github.event.inputs.tag_name }}"
+          TAG_NAME="${TAG_NAME:-master}"
 
-          UPSTREAM_VER=$(node -p "require('/tmp/upstream-index.json').master.version")
-          CURRENT_VER=$(node -p "require('./index.json').master.version")
+          # Resolve upstream Zig version
+          if [ -n "$OVERRIDE_ZIG_VER" ]; then
+            UPSTREAM_VER="$OVERRIDE_ZIG_VER"
+            echo "Using overridden Zig version: $UPSTREAM_VER"
+          else
+            curl -fsSL https://ziglang.org/download/index.json -o /tmp/upstream-index.json
+            UPSTREAM_VER=$(node -p "require('/tmp/upstream-index.json').master.version")
+          fi
 
-          # npm doesn't allow '+' in versions — strip the build hash
-          NPM_VER=$(echo "$UPSTREAM_VER" | sed 's/+.*//')
+          # Resolve npm version (strip build hash unless overridden)
+          if [ -n "$OVERRIDE_NPM_VER" ]; then
+            NPM_VER="$OVERRIDE_NPM_VER"
+            echo "Using overridden npm version: $NPM_VER"
+          else
+            # npm doesn't allow '+' in versions — strip the build hash
+            NPM_VER=$(echo "$UPSTREAM_VER" | sed 's/+.*//')
+          fi
+
+          # Check what's currently published on npm for the @zigc/cli package
+          PUBLISHED_VER=$(npm view @zigc/cli dist-tags.master 2>/dev/null || echo "none")
 
           echo "Upstream : $UPSTREAM_VER"
-          echo "Current  : $CURRENT_VER"
+          echo "Published: $PUBLISHED_VER"
           echo "npm ver  : $NPM_VER"
+          echo "tag      : $TAG_NAME"
 
           echo "upstream_version=$UPSTREAM_VER" >> "$GITHUB_OUTPUT"
           echo "npm_version=$NPM_VER"           >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG_NAME"             >> "$GITHUB_OUTPUT"
 
           FORCE="${{ github.event.inputs.force }}"
-          if [ "$UPSTREAM_VER" != "$CURRENT_VER" ] || [ "$FORCE" = "true" ]; then
+          if [ "$NPM_VER" != "$PUBLISHED_VER" ] || [ "$FORCE" = "true" ]; then
             echo "new_version=true" >> "$GITHUB_OUTPUT"
             echo "New version detected (or force=true)."
           else
@@ -162,7 +195,16 @@ jobs:
         with:
           name: prepared-workspace
 
-      - name: Publish to npm with 'master' dist-tag
-        run: npm publish --workspaces --access public --provenance --tag master
+      - name: Publish to npm
+        run: |
+          npm publish --workspaces --access public --provenance --tag ${{ needs.check.outputs.tag_name }} 2>&1 | tee /tmp/npm-publish.log
+          EXIT_CODE=${PIPESTATUS[0]}
+          if [ $EXIT_CODE -ne 0 ]; then
+            if grep -q "already exists\|previously published" /tmp/npm-publish.log; then
+              echo "Version already published — skipping."
+            else
+              exit $EXIT_CODE
+            fi
+          fi
         env:
           NODE_AUTH_TOKEN: ""

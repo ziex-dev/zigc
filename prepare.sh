@@ -230,11 +230,14 @@ if [ ! -d "$LIB_DIR/std" ]; then
   rm -rf "$pkg_dir/$extracted_dir"
 fi
 
-# Copy README.md to all packages (in parallel)
-echo "Copying README.md to all packages..."
+# Copy root metadata files to all packages (in parallel)
+echo "Copying README.md and LICENSE to all packages..."
 pids=()
 for dir in cli lib darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64 win32-arm64; do
-  cp "$SCRIPT_DIR/README.md" "$SCRIPT_DIR/$dir/README.md" &
+  (
+    cp "$SCRIPT_DIR/README.md" "$SCRIPT_DIR/$dir/README.md"
+    cp "$SCRIPT_DIR/LICENSE" "$SCRIPT_DIR/$dir/LICENSE"
+  ) &
   pids+=($!)
 done
 for pid in "${pids[@]}"; do wait "$pid"; done

@@ -1,6 +1,7 @@
 */bin/zig
 */bin/zig.exe
 */README.md
+*/LICENSE
 lib/**/*
 !cli/bin/zig
 

@@ -2,7 +2,8 @@ name: Release
 
 on:
   schedule:
-    - cron: '0 2 * * *' # Daily at 02:00 UTC
+    #  biweekly at 02:00 UTC
+    - cron: '0 2 */14 * *'
   workflow_dispatch:
     inputs:
       force:

@@ -19,7 +19,7 @@ ZIG_FULL_VER="${ZIG_UPSTREAM_VERSION:-$ZIG_VER}"
 # Update version in all workspace package.json files (in parallel)
 echo "Updating package versions to $ZIG_VER..."
 pids=()
-for pkg in lib cli darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64 win32-arm64; do
+for pkg in lib cli darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64 win32-arm64 wasm32-wasi; do
   pkg_json="$SCRIPT_DIR/$pkg/package.json"
   [ -f "$pkg_json" ] || continue
   node -e "
@@ -88,7 +88,8 @@ if [ -f "$VERSION_FILE" ]; then
     echo "  Version changed ($OLD_VER -> $ZIG_FULL_VER), cleaning old binaries..."
     rm -rf "$SCRIPT_DIR"/darwin-arm64/bin "$SCRIPT_DIR"/darwin-x64/bin \
            "$SCRIPT_DIR"/linux-x64/bin "$SCRIPT_DIR"/linux-arm64/bin \
-           "$SCRIPT_DIR"/win32-x64/bin "$SCRIPT_DIR"/win32-arm64/bin
+           "$SCRIPT_DIR"/win32-x64/bin "$SCRIPT_DIR"/win32-arm64/bin \
+           "$SCRIPT_DIR"/wasm32-wasi/bin/zig.wasm
     find "$LIB_DIR" -mindepth 1 -not -name 'package.json' -delete 2>/dev/null || true
   fi
 fi
@@ -230,10 +231,149 @@ if [ ! -d "$LIB_DIR/std" ]; then
   rm -rf "$pkg_dir/$extracted_dir"
 fi
 
+# --- wasm32-wasi: prefer official archive, else build from source ---
+build_wasm32_wasi() {
+  local pkg_dir="$SCRIPT_DIR/wasm32-wasi"
+  local bin_dir="$pkg_dir/bin"
+  local out_wasm="$bin_dir/zig.wasm"
+  mkdir -p "$bin_dir"
+
+  if [ -f "$out_wasm" ]; then
+    echo "  wasm32-wasi: already exists, skipping"
+    return 0
+  fi
+
+  # Preserve the JS runner when cleaning; only replace the wasm artifact.
+  local cached_wasm="$CACHE_DIR/$ZIG_FULL_VER/zig.wasm"
+  if [ -f "$cached_wasm" ]; then
+    echo "  wasm32-wasi: using cached zig.wasm"
+    cp "$cached_wasm" "$out_wasm"
+    return 0
+  fi
+
+  # Try official prebuilt once (not yet published on ziglang.org as of 0.17-dev).
+  local archive_name="zig-wasm32-wasi-${ZIG_FULL_VER}.tar.xz"
+  local cached_archive="$CACHE_DIR/$ZIG_FULL_VER/$archive_name"
+  if [ ! -f "$cached_archive" ]; then
+    mkdir -p "$CACHE_DIR/$ZIG_FULL_VER"
+    echo "  wasm32-wasi: checking for official archive..."
+    if curl -fsSL "${OFFICIAL_BASE}/${archive_name}?source=zigc-npm" -o "${cached_archive}.tmp" 2>/dev/null; then
+      mv "${cached_archive}.tmp" "$cached_archive"
+    else
+      rm -f "${cached_archive}.tmp"
+    fi
+  fi
+
+  if [ -f "$cached_archive" ]; then
+    echo "  wasm32-wasi: extracting official archive..."
+    local tmp_extract
+    tmp_extract=$(mktemp -d)
+    tar xf "$cached_archive" -C "$tmp_extract"
+    local found
+    found=$(find "$tmp_extract" -name 'zig.wasm' -type f | head -1)
+    if [ -n "$found" ]; then
+      cp "$found" "$out_wasm"
+      cp "$out_wasm" "$cached_wasm"
+      rm -rf "$tmp_extract"
+      echo "  wasm32-wasi: done (official)"
+      return 0
+    fi
+    rm -rf "$tmp_extract"
+    echo "  wasm32-wasi: archive had no zig.wasm, falling back to source build"
+  fi
+
+  # Resolve host Zig from a just-downloaded platform package.
+  local host_zig=""
+  case "$(uname -s)-$(uname -m)" in
+    Darwin-arm64)  host_zig="$SCRIPT_DIR/darwin-arm64/bin/zig" ;;
+    Darwin-x86_64) host_zig="$SCRIPT_DIR/darwin-x64/bin/zig" ;;
+    Linux-x86_64)  host_zig="$SCRIPT_DIR/linux-x64/bin/zig" ;;
+    Linux-aarch64) host_zig="$SCRIPT_DIR/linux-arm64/bin/zig" ;;
+  esac
+  if [ -z "$host_zig" ] || [ ! -x "$host_zig" ]; then
+    for candidate in \
+      "$SCRIPT_DIR/linux-x64/bin/zig" \
+      "$SCRIPT_DIR/darwin-arm64/bin/zig" \
+      "$SCRIPT_DIR/darwin-x64/bin/zig" \
+      "$SCRIPT_DIR/linux-arm64/bin/zig"; do
+      if [ -x "$candidate" ]; then
+        host_zig="$candidate"
+        break
+      fi
+    done
+  fi
+  if [ -z "$host_zig" ] || [ ! -x "$host_zig" ]; then
+    echo "  wasm32-wasi: no host zig binary available to build wasm" >&2
+    return 1
+  fi
+
+  local src_archive="zig-${ZIG_FULL_VER}.tar.xz"
+  local cached_src="$CACHE_DIR/$ZIG_FULL_VER/$src_archive"
+  if [ ! -f "$cached_src" ]; then
+    mkdir -p "$CACHE_DIR/$ZIG_FULL_VER"
+    local fetched=false
+    while IFS= read -r mirror; do
+      [ -z "$mirror" ] && continue
+      echo "  wasm32-wasi: downloading source from ${mirror}..."
+      if curl -fsSL "${mirror}/${src_archive}?source=zigc-npm" -o "${cached_src}.tmp" 2>/dev/null; then
+        mv "${cached_src}.tmp" "$cached_src"
+        fetched=true
+        break
+      fi
+      rm -f "${cached_src}.tmp"
+    done < "$MIRRORS_FILE"
+    if [ "$fetched" = false ]; then
+      echo "  wasm32-wasi: failed to download source tarball" >&2
+      return 1
+    fi
+  else
+    echo "  wasm32-wasi: using cached source archive"
+  fi
+
+  local src_dir="$CACHE_DIR/$ZIG_FULL_VER/src"
+  if [ ! -f "$src_dir/build.zig" ]; then
+    echo "  wasm32-wasi: extracting source..."
+    rm -rf "$src_dir"
+    mkdir -p "$src_dir"
+    tar xf "$cached_src" -C "$src_dir" --strip-components=1
+  fi
+
+  local build_prefix="$CACHE_DIR/$ZIG_FULL_VER/wasi-build"
+  echo "  wasm32-wasi: compiling zig.wasm (this may take a few minutes)..."
+  (
+    cd "$src_dir"
+    export ZIG_GLOBAL_CACHE_DIR="$build_prefix/global-cache"
+    export ZIG_LOCAL_CACHE_DIR="$build_prefix/local-cache"
+    export ZIG_LIB_DIR="$src_dir/lib"
+    mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+    "$host_zig" build \
+      --zig-lib="$src_dir/lib" \
+      -Dtarget=wasm32-wasi \
+      -Doptimize=ReleaseSafe \
+      -Dno-lib=true \
+      -Dno-langref=true \
+      -Denable-llvm=false \
+      -Dversion-string="$ZIG_FULL_VER" \
+      -p "$build_prefix/out"
+  )
+
+  if [ ! -f "$build_prefix/out/bin/zig.wasm" ]; then
+    echo "  wasm32-wasi: build did not produce zig.wasm" >&2
+    return 1
+  fi
+
+  cp "$build_prefix/out/bin/zig.wasm" "$out_wasm"
+  cp "$out_wasm" "$cached_wasm"
+  echo "  wasm32-wasi: done (built from source)"
+}
+
+echo "Preparing wasm32-wasi..."
+build_wasm32_wasi
+
 # Copy root metadata files to all packages (in parallel)
 echo "Copying README.md and LICENSE to all packages..."
 pids=()
-for dir in cli lib darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64 win32-arm64; do
+for dir in cli lib darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64 win32-arm64 wasm32-wasi; do
   (
     cp "$SCRIPT_DIR/README.md" "$SCRIPT_DIR/$dir/README.md"
     cp "$SCRIPT_DIR/LICENSE" "$SCRIPT_DIR/$dir/LICENSE"
@@ -241,6 +381,9 @@ for dir in cli lib darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64 win32
   pids+=($!)
 done
 for pid in "${pids[@]}"; do wait "$pid"; done
+
+# Ensure the WASI runner stays executable
+chmod +x "$SCRIPT_DIR/wasm32-wasi/bin/zig"
 
 # Save current version
 echo "$ZIG_FULL_VER" > "$VERSION_FILE"

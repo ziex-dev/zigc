@@ -172,6 +172,22 @@ else
   else
     fail "zig build run produced no output"
   fi
+
+  # WASI package (optional — skip if zig.wasm not prepared yet)
+  WASI_WASM="$SCRIPT_DIR/wasm32-wasi/bin/zig.wasm"
+  WASI_BIN="$SCRIPT_DIR/wasm32-wasi/bin/zig"
+  if [ -f "$WASI_WASM" ] && [ -f "$WASI_BIN" ]; then
+    echo ""
+    WASI_OUTPUT=$(node "$WASI_BIN" version 2>&1) || true
+    if echo "$WASI_OUTPUT" | grep -qF "$ZIG_VERSION"; then
+      pass "zig-wasi version > $ZIG_VERSION"
+    else
+      fail "zig-wasi version expected '$ZIG_VERSION', got: $WASI_OUTPUT"
+    fi
+  else
+    echo ""
+    echo "  SKIP: wasm32-wasi not prepared (no zig.wasm)"
+  fi
 fi
 
 # --- Summary ---

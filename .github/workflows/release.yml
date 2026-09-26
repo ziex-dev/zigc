@@ -136,6 +136,7 @@ jobs:
             linux-arm64/
             win32-x64/
             win32-arm64/
+            wasm32-wasi/
           retention-days: 1
 
   smoke-test:
@@ -161,7 +162,7 @@ jobs:
 
       - name: Restore binary permissions
         if: runner.os != 'Windows'
-        run: chmod +x linux-x64/bin/zig linux-arm64/bin/zig darwin-arm64/bin/zig darwin-x64/bin/zig
+        run: chmod +x linux-x64/bin/zig linux-arm64/bin/zig darwin-arm64/bin/zig darwin-x64/bin/zig wasm32-wasi/bin/zig
 
       - name: Run smoke tests
         shell: bash
@@ -191,7 +192,7 @@ jobs:
           name: prepared-workspace
 
       - name: Restore binary permissions
-        run: chmod +x linux-x64/bin/zig linux-arm64/bin/zig darwin-arm64/bin/zig darwin-x64/bin/zig
+        run: chmod +x linux-x64/bin/zig linux-arm64/bin/zig darwin-arm64/bin/zig darwin-x64/bin/zig wasm32-wasi/bin/zig
 
       - name: Publish to npm
         run: |

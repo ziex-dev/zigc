@@ -1,9 +1,12 @@
 */bin/zig
 */bin/zig.exe
+*/bin/zig.wasm
 */README.md
 */LICENSE
 lib/**/*
 !cli/bin/zig
+!wasm32-wasi/bin/zig
+!wasm32-wasi/index.js
 
 !lib/package.json
 .zig-version

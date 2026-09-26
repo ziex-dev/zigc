@@ -1,0 +1,85 @@
+#!/usr/bin/env node
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { WASI } from 'node:wasi';
+
+const require = createRequire(import.meta.url);
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const wasmPath = join(__dirname, 'zig.wasm');
+
+function resolveLibDir() {
+  try {
+    return dirname(require.resolve('@zigc/lib/package.json'));
+  } catch {
+    // Monorepo checkout: packages live side-by-side (wasm32-wasi/bin -> ../../lib)
+    const sibling = join(__dirname, '..', '..', 'lib');
+    if (existsSync(join(sibling, 'package.json'))) return sibling;
+    console.error('Error: @zigc/lib is required to run the WASI Zig compiler.');
+    process.exit(1);
+  }
+}
+
+function cacheDir() {
+  const dir = process.env.ZIG_GLOBAL_CACHE_DIR
+    || join(tmpdir(), 'zigc-wasi-cache');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+async function runWithWasmtime(libDir, cache) {
+  const args = [
+    `--dir=${libDir}::/lib`,
+    `--dir=${cache}::/cache`,
+    `--dir=${process.cwd()}::/`,
+    '--env', 'ZIG_LIB_DIR=/lib',
+    '--env', 'ZIG_GLOBAL_CACHE_DIR=/cache',
+    wasmPath,
+    ...process.argv.slice(2),
+  ];
+  return new Promise((resolve) => {
+    const child = spawn('wasmtime', args, { stdio: 'inherit' });
+    child.on('error', () => resolve(false));
+    child.on('exit', (code, signal) => {
+      if (signal) resolve(false);
+      else process.exit(code ?? 1);
+    });
+  });
+}
+
+async function runWithNodeWasi(libDir, cache) {
+  const wasi = new WASI({
+    version: 'preview1',
+    args: ['zig', ...process.argv.slice(2)],
+    env: {
+      ...process.env,
+      ZIG_LIB_DIR: '/lib',
+      ZIG_GLOBAL_CACHE_DIR: '/cache',
+    },
+    preopens: {
+      '/lib': libDir,
+      '/cache': cache,
+      '/': process.cwd(),
+    },
+  });
+
+  const bytes = await readFile(wasmPath);
+  const { instance } = await WebAssembly.instantiate(bytes, wasi.getImportObject());
+  wasi.start(instance);
+}
+
+if (!existsSync(wasmPath)) {
+  console.error(`Error: missing ${wasmPath}. Run prepare.sh first.`);
+  process.exit(1);
+}
+
+const libDir = resolveLibDir();
+const cache = cacheDir();
+
+if (await runWithWasmtime(libDir, cache) === false) {
+  await runWithNodeWasi(libDir, cache);
+}

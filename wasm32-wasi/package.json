@@ -1,0 +1,28 @@
+{
+  "name": "@zigc/wasm32-wasi",
+  "version": "0.16.0",
+  "type": "module",
+  "description": "Zig compiler as wasm32-wasi — run via WASI or embed the wasm in your own runtime/worker",
+  "exports": {
+    ".": "./index.js",
+    "./zig.wasm": "./bin/zig.wasm"
+  },
+  "bin": {
+    "zig-wasi": "bin/zig"
+  },
+  "files": [
+    "bin/",
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ziex-dev/zigc.git"
+  },
+  "license": "MIT",
+  "preferUnplugged": true,
+  "dependencies": {
+    "@zigc/lib": "0.16.0"
+  }
+}

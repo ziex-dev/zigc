@@ -349,7 +349,7 @@ build_wasm32_wasi() {
     "$host_zig" build \
       --zig-lib="$src_dir/lib" \
       -Dtarget=wasm32-wasi \
-      -Doptimize=ReleaseSafe \
+      -Doptimize=ReleaseSmall \
       -Dno-lib=true \
       -Dno-langref=true \
       -Denable-llvm=false \
